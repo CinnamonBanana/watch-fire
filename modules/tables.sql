@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS hosts (
+ name TEXT NOT NULL,
+ ip TEXT NOT NULL,
+ status CHAR NOT NULL,
+ token TEXT NOT NULL,
+ last_edit DATETIME2
+);

@@ -1,0 +1,7 @@
+__pycache__
+
+wfdb.db
+.config
+
+utils/tray.py
+.ipynb_checkpoints
