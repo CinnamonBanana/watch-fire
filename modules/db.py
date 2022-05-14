@@ -6,7 +6,7 @@
 from mimetypes import init
 import sqlite3
 
-class DBConnect:
+class Database:
     def __init__(self) -> None:
         self.config()
 
@@ -14,7 +14,7 @@ class DBConnect:
         try:
             sqlite_connection = sqlite3.connect('wfdb.db')
             cursor = sqlite_connection.cursor()
-            with open('./utils/tables.sql', 'r') as sqlite_file:
+            with open('./modules/tables.sql', 'r') as sqlite_file:
                 sql_script = sqlite_file.read()
             cursor.executescript(sql_script)
             cursor.close()
@@ -47,5 +47,5 @@ class DBConnect:
         pass
 
 if __name__ == "__main__":
-    db = DBConnect()
+    db = Database()
     db.get_hosts()

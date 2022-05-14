@@ -1,12 +1,13 @@
-from cmath import pi
 from PyQt5 import QtGui
-from PyQt5.QtWidgets import QMainWindow, QSystemTrayIcon, QAction, QMenu, qApp
+from PyQt5.QtWidgets import QMainWindow, QMessageBox, QSystemTrayIcon, QAction, QMenu, qApp, QHeaderView
+from PyQt5.QtCore import Qt, QSettings
+
 from ui.main import Ui_MainWindow
-
+from modules.models import TableModel
 from modules.sniffer import Sniffer
-import scapy.all as scapy
+from modules.db import Database
 
-import pickle
+import pickle, sys
 
 class MainWindow(QMainWindow):
 
@@ -54,7 +55,16 @@ class MainWindow(QMainWindow):
         except:
             with open('.config', 'wb') as f:       
                 pickle.dump(self.settings, f)
+        
+        RUN_PATH = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+        self.autostart = QSettings(RUN_PATH, QSettings.NativeFormat)
+
         self.update_settings()
+
+        ## Setting up host tables
+        self.ui.tabWidget.currentChanged.connect(self.update_hosts)
+        self.ui.tableHosts.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ui.tableBlocked.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         ## Start sniffer thread
         self.thread = Sniffer(str(self.settings['adapter']))
@@ -81,6 +91,10 @@ class MainWindow(QMainWindow):
             self.ui.logLines.setValue(self.settings['maxLog'])
             self.ui.checkTray.setChecked(self.settings['tray'])
             self.ui.checkAStart.setChecked(self.settings['autostart'])
+        if self.ui.checkAStart.isChecked():
+            self.autostart.setValue("MainWindow",sys.argv[0])
+        else:
+            self.autostart.remove("MainWindow")
         self.show_settings(False)
 
     def show_settings(self, show):
@@ -94,7 +108,7 @@ class MainWindow(QMainWindow):
             self.tray_icon.showMessage(
                 "Watch-Fire",
                 "Application was minimized to Tray",
-                QSystemTrayIcon.Information,
+                QtGui.QIcon("icon.ico"),
                 2000
             )
 
@@ -105,3 +119,21 @@ class MainWindow(QMainWindow):
     
     def receive_msg(self, pkt):
         self.ui.textEdit.insertPlainText(f"Received broadcast from {pkt['Ether'].src}\n")
+        if pkt['Ether'].type ==2048:
+            if pkt['IP'].src == "192.168.1.64":
+                ## DB IP susupicious count ++
+                
+                pass
+    
+    def update_hosts(self, i):
+        if i>1: return
+        db = Database()
+        data = db.get_hosts(blocked=i)
+        header = ["Status", "Hostname", "IP"]
+        self.model = TableModel(header, data)
+        if i:
+            self.ui.tableBlocked.setModel(self.model)
+            #self.ui.tableBlocked.resizeColumnsToContents()
+        else:
+            self.ui.tableHosts.setModel(self.model)
+            #self.ui.tableHosts.resizeColumnsToContents()
