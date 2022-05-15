@@ -1,0 +1,4 @@
+numpy==1.22.3
+PyPTables==1.0.7
+PyQt5==5.15.6
+scapy==2.4.5

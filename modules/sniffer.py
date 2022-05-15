@@ -29,16 +29,17 @@ class Sniffer(QThread):
         return (pkt['Ether'].src != self.mac and pkt['Ether'].type == 2048)
 
 if __name__ == "__main__":
-    adapter = "Dell Wireless 1705 802.11b|g|n (2.4GHZ)"
+    scapy.findalldevs()
+    # adapter = "Dell Wireless 1705 802.11b|g|n (2.4GHZ)"
 
-    MYMAC = "b0:10:41:1b:30:79"
-    ANDROID = "a8:9c:ed:75:77:41"
+    # MYMAC = "b0:10:41:1b:30:79"
+    # ANDROID = "a8:9c:ed:75:77:41"
 
-    def isNotOutgoing(pkt):
-        #return pkt['Ether'].src != MYMAC and pkt['Ether'].type == 2048
-        return pkt['Ether'].src == ANDROID
+    # def isNotOutgoing(pkt):
+    #     return pkt['Ether'].src != MYMAC# and pkt['Ether'].type == 2048
+    #     #return pkt['Ether'].src == ANDROID
 
-    def http_header(pkt):
-        print(pkt.show())
+    # def http_header(pkt):
+    #     print(pkt.show())
         
-    scapy.sniff(iface=adapter, store=False, prn=http_header, lfilter=isNotOutgoing)
+    # scapy.sniff(iface=adapter, store=False, prn=http_header, lfilter=isNotOutgoing)

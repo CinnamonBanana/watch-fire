@@ -1,5 +1,7 @@
 from PyQt5.QtCore import QAbstractTableModel, Qt
 from PyQt5.QtGui import QColor
+from datetime import datetime
+
 class TableModel(QAbstractTableModel):
     
     colors = {
@@ -15,7 +17,10 @@ class TableModel(QAbstractTableModel):
 
     def data(self, index, role):
         if role == Qt.DisplayRole:
-            return self.data[index.row()][index.column()]
+            val = self.data[index.row()][index.column()]
+            if index.column() == 3:
+                return datetime.utcfromtimestamp(float(val)).strftime('%H:%M:%S %Y-%m-%d')
+            return val
         if role == Qt.BackgroundRole:
             if index.column() == 0:
                 return QColor(self.colors[self.data[index.row()][index.column()]])
@@ -26,7 +31,10 @@ class TableModel(QAbstractTableModel):
         return len(self.data)
 
     def columnCount(self, index):
-        return len(self.data[0])
+        if len(self.data):
+            return len(self.data[0])
+        else:
+            return 0
 
     def headerData(self, col, orientation, role):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:

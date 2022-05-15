@@ -7,7 +7,7 @@ from modules.models import TableModel
 from modules.sniffer import Sniffer
 from modules.db import Database
 
-import pickle, sys
+import pickle, sys, logging
 
 class MainWindow(QMainWindow):
 
@@ -15,6 +15,7 @@ class MainWindow(QMainWindow):
         'maxLog' : 100,
         'tray': True,
         'autostart': False,
+        #'adapter': ''
         'adapter': 'Dell Wireless 1705 802.11b|g|n (2.4GHZ)'
     }
 
@@ -24,7 +25,10 @@ class MainWindow(QMainWindow):
         self.ui.setupUi(self)
         self.ui.textEdit.setReadOnly(True)
         self.setWindowIcon(QtGui.QIcon("icon.ico"))
+        self.db = Database()
         
+        logging.basicConfig(filename='watchfire.log', filemode='a',format='%(asctime)s - %(message)s', level=logging.INFO)
+
         ## Tray setup
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QtGui.QIcon("icon.ico"))
@@ -115,25 +119,44 @@ class MainWindow(QMainWindow):
     def pac_analyse(self, pkt):
         # self.ui.textEdit.insertPlainText(f"Received from {pkt['Ether'].type}\n")
         if pkt['Ether'].type == 2048: ## IPv4 code
-            self.ui.textEdit.insertPlainText(f"Received pckt from {pkt['IP'].src}\n")
+            self.add_host(pkt)
+            pass
     
     def receive_msg(self, pkt):
-        self.ui.textEdit.insertPlainText(f"Received broadcast from {pkt['Ether'].src}\n")
+        #self.log(f"Received broadcast from {pkt['Ether'].src}\n")
         if pkt['Ether'].type ==2048:
-            if pkt['IP'].src == "192.168.1.64":
-                ## DB IP susupicious count ++
-                
-                pass
+            pass
     
     def update_hosts(self, i):
         if i>1: return
-        db = Database()
-        data = db.get_hosts(blocked=i)
-        header = ["Status", "Hostname", "IP"]
+        data = self.db.get_hosts(blocked=i)
+        header = ["Status", "Hostname", "IP", "Changed"]
         self.model = TableModel(header, data)
         if i:
             self.ui.tableBlocked.setModel(self.model)
-            #self.ui.tableBlocked.resizeColumnsToContents()
         else:
             self.ui.tableHosts.setModel(self.model)
-            #self.ui.tableHosts.resizeColumnsToContents()
+
+    def log(self, msg):
+        logging.info(msg)
+        self.ui.textEdit.insertPlainText(f'{msg}\n')
+    
+    def add_host(self, pkt):
+        if pkt['IP'].src not in self.db.get_ips():
+            data = {'name':"NewPC", 
+            'ip':pkt['IP'].src, 
+            'status':"G", 
+            'badscore':'0', 
+            'token':"testtoken"}
+            self.db.add_host(data)
+            self.update_hosts(self.ui.tabWidget.currentIndex())
+            self.log(f"Added {data['ip']} host")
+
+    def add_badscore(self, ip):
+        if ip not in self.db.get_ips(blocked=True):
+            print(self.db.get_host(ip))
+        
+
+    def change_host_status(self, ip, status):
+        self.db.edit_host(ip, {'status': status})
+        self.log(f"{ip} status changed to {status}")

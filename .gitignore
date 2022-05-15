@@ -1,6 +1,7 @@
 __pycache__
 
 wfdb.db
+watchfire.log
 .config
 
 utils/tray.py
