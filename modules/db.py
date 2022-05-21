@@ -8,7 +8,7 @@ class Database:
     
     dbf = 'wfdb.db'
 
-    def __init__(self) -> None:
+    def __init__(self):
         self.config()
 
     def config(self):
@@ -72,14 +72,14 @@ class Database:
 
     def edit_host(self, ip, data):
         sql = f'''UPDATE 'hosts' SET '''
-        for key, value in data.items():
+        for key in data.keys():
             sql += f'''{key} = ?, '''
         sql += f'''last_edit = ? WHERE ip = '{ip}';'''
         self.query(query=sql, data=data)
 
 if __name__ == "__main__":
     db = Database()
-    data = {'name':"NewPC", 'ip':'1.1.1.1', 'status':"G", 'badscore':'0', 'token':"testtoken"}
-    db.add_host(data)
-    #print(db.get_host('192.168.1.64'))
+    #data = {'name':"NewPC", 'ip':'1.1.1.1', 'status':"G", 'badscore':'0', 'token':"testtoken"}
+    #db.add_host(data)
+    print(db.get_host('192.168.1.64'))
     print(db.get_hosts())

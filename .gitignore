@@ -3,6 +3,8 @@ __pycache__
 wfdb.db
 watchfire.log
 .config
+.login
 
-utils/tray.py
 .ipynb_checkpoints
+.qt_for_python
+
