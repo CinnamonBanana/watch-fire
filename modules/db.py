@@ -1,8 +1,7 @@
+import datetime
 
-# my_conn = create_engine("sqlite:///my_db.db")
-# r_set=my_conn.execute('''SELECT * from student WHERE "mark">=75''')
+import sqlite3
 
-import sqlite3, datetime
 
 class Database:
     
@@ -10,6 +9,7 @@ class Database:
 
     def __init__(self):
         self.config()
+
 
     def config(self):
         try:
@@ -24,7 +24,8 @@ class Database:
         finally:
             if (sqlite_connection):
                 sqlite_connection.close()
-    
+
+
     def query(self, query, data=None, oneCol=False):
         try:
             sqlite_connection = sqlite3.connect(self.dbf)
@@ -48,16 +49,19 @@ class Database:
                 sqlite_connection.close()
             return res
 
+
     def get_hosts(self, blocked=False):
         sql = '''SELECT status, name, ip, last_edit FROM hosts '''
         if blocked:
                 sql += '''WHERE "status" = "R"'''
         return self.query(query=sql)
 
+
     def get_host(self, ip):
         sql = f'''SELECT * FROM hosts WHERE "ip" = "{ip}"'''
         res = self.query(query=sql)
         return res[0] if res else None
+
 
     def get_ips(self, blocked=False):
         sql = '''SELECT ip FROM hosts '''
@@ -65,10 +69,12 @@ class Database:
                 sql += '''WHERE "status" = "R"'''
         return self.query(query=sql, oneCol=True)
 
+
     def add_host(self, data):
         sql = f'''INSERT INTO 'hosts' ('name','ip','status','badscore','token','last_edit') 
                                 VALUES (?, ?, ?, ?, ?, ?);'''
         self.query(query=sql, data=data)
+
 
     def edit_host(self, ip, data):
         sql = f'''UPDATE 'hosts' SET '''
@@ -76,6 +82,7 @@ class Database:
             sql += f'''{key} = ?, '''
         sql += f'''last_edit = ? WHERE ip = '{ip}';'''
         self.query(query=sql, data=data)
+
 
 if __name__ == "__main__":
     db = Database()

@@ -1,5 +1,6 @@
 __pycache__
 
+server.py
 wfdb.db
 watchfire.log
 .config

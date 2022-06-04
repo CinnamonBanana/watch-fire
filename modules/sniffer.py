@@ -1,6 +1,14 @@
-from numpy import broadcast
+import time
+import csv
+import pickle
+
+import sklearn
+import pandas as pd
 import scapy.all as scapy
 from PyQt5.QtCore import QThread, pyqtSignal
+
+from modules.utils import *
+
 
 class Sniffer(QThread):
     framesReceived = pyqtSignal(object)
@@ -12,6 +20,11 @@ class Sniffer(QThread):
         self.adapter = adapter
         self.exiting = False
         self.mac = "b0:10:41:1b:30:79"
+        # self.badmac = 'a8:9c:ed:75:77:41'
+        self.border = 0.75
+        self.buffer = {}
+        self.fieldnames = ['proto','ports', 'portmin', 'portmax', 'delay', 'count', 'length']
+        self.model = pickle.load(open('model', "rb"))
 
     def __del__(self):
         self.exiting = True
@@ -20,18 +33,71 @@ class Sniffer(QThread):
     def run(self):
         try:
             scapy.sniff(iface=self.adapter, store=False, prn=self.pktProcess, lfilter=self.isNotOutgoing)
-        except:
-            self.startFailed.emit(f"Cannot open current adapter: {self.adapter}")
+        except Exception as e:
+            self.startFailed.emit(f"Cannot access current adapter: {self.adapter}\nError: {e}")
 
     def pktProcess(self, pkt):
-        if pkt['Ether'].dst == 'ff:ff:ff:ff:ff:ff':# and pkt['Ether'].src == 'a8:9c:ed:75:77:41':
-            self.broadcastReceived.emit(pkt)
+        # print(pkt.show())
+        if pkt['Ether'].dst == 'ff:ff:ff:ff:ff:ff':
+            if 'Raw' in pkt:
+                self.broadcastReceived.emit({'src':pkt['IP'].src, 'msg': pkt['Raw'].load})
         else:
-            #pass
-            self.framesReceived.emit(pkt)
+            data = self.pkt_info(pkt)
+            if not data: return
+            #pred = self.predictor(data)
+            #print(f"{pkt['Ether'].src} is {'bad ' if pred else 'good'} (data={data})") 
+            self.framesReceived.emit({'ip': pkt['IP'].src, 'score':self.predictor(data)})
+
+    def predictor(self, data):
+        df = pd.DataFrame(columns=self.fieldnames)
+        df.loc[0] = list(data.values())
+        return self.model.predict(df)[0]
+
+    def pkt_info(self, pkt):
+        if all (k not in pkt for k in ('DNS','ARP')):
+        #if 'DNS' not in pkt and 'ARP' not in pkt: 
+            ip = pkt['IP'].src
+            curtime = time.time()
+            if ip not in self.buffer:
+                self.buffer[ip] = {}
+            proto = get_proto(pkt['IP'].proto)
+            sproto = str(proto)
+            if sproto not in self.buffer[ip]:
+                self.new_proto(ip, sproto, curtime)
+            if curtime-self.buffer[ip][sproto]['start']<=5:
+                try:
+                    port = pkt[2].dport
+                    self.buffer[ip][sproto]['pkt']['ports'] += port
+                    min = self.buffer[ip][sproto]['pkt']['portmin'] 
+                    max = self.buffer[ip][sproto]['pkt']['portmax']
+                    if port < min: self.buffer[ip][sproto]['pkt']['portmin'] = port
+                    if port > max: self.buffer[ip][sproto]['pkt']['portmax'] = port
+                except:
+                    self.buffer[ip][sproto]['pkt']['ports'] += 0
+                self.buffer[ip][sproto]['pkt']['delay'] += curtime - self.buffer[ip][sproto]['last']
+                self.buffer[ip][sproto]['last'] = curtime
+                self.buffer[ip][sproto]['pkt']['count'] += 1
+                self.buffer[ip][sproto]['pkt']['length'] += len(list(pkt)[-1])
+                return False
+            else:
+                a = self.buffer[ip].pop(sproto, False)['pkt']
+                return get_avg(proto, a)
+
+    def new_proto(self, ip, proto, time):
+        self.buffer[ip][proto] = {'start': time, 'last': time, 
+                                    'pkt': {
+                                        'ports': 0,
+                                        'portmin':65535,
+                                        'portmax': 0,
+                                        'delay': 0,
+                                        'count': 0,
+                                        'length': 0
+                                    }
+                                }
 
     def isNotOutgoing(self, pkt):
-        return (pkt['Ether'].src != self.mac and pkt['Ether'].type == 2048)
+        if all (k in pkt for k in ('Ether','IP')):
+            return (pkt['Ether'].src != self.mac and pkt['Ether'].type == 2048)
 
 if __name__ == "__main__":
     pass

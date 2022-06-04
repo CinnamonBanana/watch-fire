@@ -1,7 +1,13 @@
+# -*- coding: utf-8 -*-
+
+"""Main window start script."""
+
 import sys
+
 from PyQt5.QtWidgets import QApplication
 
 from dialogs.window import MainWindow
+
 
 def main():
     app = QApplication(sys.argv)
