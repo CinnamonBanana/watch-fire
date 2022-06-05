@@ -20,11 +20,9 @@ class Sniffer(QThread):
         self.adapter = adapter
         self.exiting = False
         self.mac = "b0:10:41:1b:30:79"
-        # self.badmac = 'a8:9c:ed:75:77:41'
         self.border = 0.75
         self.buffer = {}
         self.fieldnames = ['proto','ports', 'portmin', 'portmax', 'delay', 'count', 'length']
-        self.model = pickle.load(open('model', "rb"))
 
     def __del__(self):
         self.exiting = True
@@ -32,6 +30,8 @@ class Sniffer(QThread):
 
     def run(self):
         try:
+            self.model = pickle.load(open('model', "rb"))
+            self.badmodel = pickle.load(open('badmodel', "rb"))
             scapy.sniff(iface=self.adapter, store=False, prn=self.pktProcess, lfilter=self.isNotOutgoing)
         except Exception as e:
             self.startFailed.emit(f"Cannot access current adapter: {self.adapter}\nError: {e}")
@@ -44,18 +44,18 @@ class Sniffer(QThread):
         else:
             data = self.pkt_info(pkt)
             if not data: return
-            #pred = self.predictor(data)
-            #print(f"{pkt['Ether'].src} is {'bad ' if pred else 'good'} (data={data})") 
-            self.framesReceived.emit({'ip': pkt['IP'].src, 'score':self.predictor(data)})
+            if 'UDP' in pkt:
+                if pkt['UDP'].dport == 1900: return
+            pred = self.predictor(data)
+            self.framesReceived.emit({'ip': pkt['IP'].src, 'score':pred})
 
     def predictor(self, data):
         df = pd.DataFrame(columns=self.fieldnames)
         df.loc[0] = list(data.values())
-        return self.model.predict(df)[0]
+        return self.model.predict(df)[0], self.badmodel.predict(df)[0]
 
     def pkt_info(self, pkt):
         if all (k not in pkt for k in ('DNS','ARP')):
-        #if 'DNS' not in pkt and 'ARP' not in pkt: 
             ip = pkt['IP'].src
             curtime = time.time()
             if ip not in self.buffer:

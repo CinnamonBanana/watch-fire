@@ -1,25 +1,37 @@
 import socket
 import time
 
-server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+from PyQt5.QtCore import QThread
 
-# Enable port reusage so we will be able to run multiple clients and servers on single (host, port). 
-# Do not use socket.SO_REUSEADDR except you using linux(kernel<3.9): goto https://stackoverflow.com/questions/14388706/how-do-so-reuseaddr-and-so-reuseport-differ for more information.
-# For linux hosts all sockets that want to share the same address and port combination must belong to processes that share the same effective user ID!
-# So, on linux(kernel>=3.9) you have to run multiple servers and clients under one user to share the same (host, port).
-try:
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-except:
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+class Sender(QThread):
+    def __init__(self, parent=None):
+        super(Sender, self).__init__(parent)
+        self.exiting = False
+        self.queue = []
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        try:
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except:
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Enable broadcasting mode
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.server.settimeout(0.5)
 
-# Enable broadcasting mode
-server.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    def __del__(self):
+        self.exiting = True
+        self.wait()
 
-# Set a timeout so the socket does not block
-# indefinitely when trying to receive data.
-server.settimeout(0.2)
-message = b"Your very important message"
-while True:
-    server.sendto(message, ('<broadcast>', 37020))
-    print("Message sent!")
-    time.sleep(1)
+    def bcast(self, data):
+        message = bytes(str(data)+"\n", 'utf-8')
+        for i in range(5):
+            self.server.sendto(message, ('<broadcast>', 37020))
+            time.sleep(0.05)
+
+    def add_msg(self, data):
+        self.queue.append(data)
+
+    def run(self):
+        while not self.exiting:
+            if self.queue:
+                # print(f"{self.queue=}")
+                self.bcast(self.queue.pop(0))

@@ -15,7 +15,9 @@ from PyQt5.QtWidgets import QMainWindow, QMessageBox, QSystemTrayIcon, QAction, 
 from modules.db import Database
 from modules.models import TableModel
 from modules.ruleadder import Ruler
+from modules.sender import Sender
 from modules.sniffer import Sniffer
+from modules.utils import data_msg
 from server import serverip
 from ui.main import Ui_MainWindow
 
@@ -46,6 +48,7 @@ class MainWindow(QMainWindow):
         self.minScore = 5
         self.maxScore = 10
         self.server = serverip
+        self.token = 'None'
         self.ruler = Ruler()
 
         logging.basicConfig(filename='watchfire.log',
@@ -94,6 +97,7 @@ class MainWindow(QMainWindow):
 
         # Init sniffer thread
         self.ui.pushButton.clicked.connect(self.start)
+        self.send = None
         self.thread = None
 
         # Setting up host tables
@@ -157,14 +161,19 @@ class MainWindow(QMainWindow):
 
     def pac_analyse(self, data):
         ip = data['ip']
-        score = data['score']
+        score = data['score'][0]
+        badscore = data['score'][1]
         self.add_host(ip)
         borders = {
             'GOOD': [-0.1, 0.2],
             'ICMP': [2720, 2790],
         }
+        bad = [0.85, 1.1]
         if all (not k[0]<score<k[1] for k in (borders.values())):
-            self.add_badscore(ip)
+            #print(f"=======\n{ip=}\n{score=}\n{badscore=}")
+            status = self.add_badscore(ip, add=5 if bad[0]<=badscore<=bad[1] else 1)
+            if status not in ['G', 'RO']:
+                self.send.add_msg(data_msg(ip=ip, status=status, token=self.token))
     
     def receive_msg(self, data):
         try:
@@ -213,8 +222,7 @@ class MainWindow(QMainWindow):
 
     def start(self):
         # send credentials to server
-        if self.ui.devList.currentText() == None:
-            return
+        if self.ui.devList.currentText() == None: return
         self.thread = Sniffer(str(self.settings['adapter']))
         self.thread.framesReceived.connect(self.pac_analyse)
         self.thread.broadcastReceived.connect(self.receive_msg)
@@ -223,17 +231,21 @@ class MainWindow(QMainWindow):
         self.ui.pushButton.setText("Stop")
         self.ui.pushButton.clicked.disconnect(self.start)
         self.ui.pushButton.clicked.connect(self.stop)
+        self.send = Sender()
         if self.ui.rememberCheck.isChecked():
             self.login_save()
         self.log("System started.")
         self.sys_msg("System started")
         self.thread.start()
+        self.send.start()
 
     def stop(self):
         self.thread.terminate()
+        self.send.terminate()
         self.log("System terminated.")
         self.sys_msg("System terminated.")
         self.thread = None
+        self.send = None
         self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/inactive.png"))
         self.ui.pushButton.setText("Start")
         self.ui.pushButton.clicked.disconnect(self.stop)
@@ -270,20 +282,26 @@ class MainWindow(QMainWindow):
             self.update_hosts(self.ui.tabWidget.currentIndex())
             self.log(f"Added {data['ip']} host")
 
-    def add_badscore(self, ip):
+    def add_badscore(self, ip, add=1):
         if ip not in self.db.get_ips(blocked=True):
             if not self.db.get_host(ip):
                 self.add_host(ip)
             row = self.db.get_host(ip)
-            scr = int(row[3])+1
+            scr = int(row[3])+add
             if scr >= self.maxScore:
                 self.change_host_status(ip, 'R', scr)
                 self.log(f"{ip} was successfully blocked!")
                 self.block_ip()
-            elif scr >=self.minScore:
+                status = 'R'
+            elif  self.minScore<= scr <self.maxScore:
                 self.change_host_status(ip, 'Y', scr)
+                status = 'Y'
             else:
                 self.change_host_status(ip, 'G', scr)
+                status = 'G'
+            return status
+        else:
+            return 'RO'
 
     def change_host_status(self, ip, status, score):
         self.db.edit_host(ip, {'status': status, 'badscore': score})

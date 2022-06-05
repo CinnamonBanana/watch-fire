@@ -1,3 +1,5 @@
+import time
+
 def get_avg(proto, data):
         res = {
             'proto': proto,
@@ -22,3 +24,9 @@ def get_proto(proto):
                     return 3
                 case _:  # OTHER
                     return 0
+
+def data_msg(ip, token, status=None, name=None, type='Alert'):
+    if type == 'Alert':
+        return {'type': type, 'ip': ip, 'status':status, 'tmstmp':time.time(), 'token':token}
+    else:
+        return {'type': type, 'ip': ip, 'name':name, 'tmstmp':time.time(), 'token':token}
