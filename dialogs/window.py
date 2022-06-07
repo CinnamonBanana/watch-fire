@@ -5,20 +5,23 @@
 import ast
 import logging
 import pickle
-import sys
+import csv
+import os
 from datetime import datetime
 
 from PyQt5 import QtGui
-from PyQt5.QtCore import Qt, QSettings
+from PyQt5.QtCore import Qt, QSettings, QAbstractTableModel
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QSystemTrayIcon, QAction, QMenu, qApp, QHeaderView
+from scipy import rand
 
 from modules.db import Database
-from modules.models import TableModel
+from modules.learn import Learner
+from modules.models import TableModel, CSVModel
 from modules.ruleadder import Ruler
 from modules.sender import Sender
 from modules.sniffer import Sniffer
 from modules.utils import data_msg
-from server import serverip
+from inet import *
 from ui.main import Ui_MainWindow
 
 class MainWindow(QMainWindow):
@@ -28,13 +31,29 @@ class MainWindow(QMainWindow):
         'tray': False,
         'remember': True,
         'autostart': False,
-        'adapter': ''
+        'adapter': '',
+        'learning': 0,
+        'last_learn': 0,
+        'save_buff': False
     }
 
     devs = [
         '',
         'wlp6s0',
         'Dell Wireless 1705 802.11b|g|n (2.4GHZ)'
+    ]
+
+    learn_types = [
+        'Everything is safe',
+        'Connection confirmation'
+    ]
+
+    learn_sched = [
+        'Never',
+        'Every month',
+        'Every 2 months',
+        'Every 6 months',
+        'Every year'
     ]
 
     def __init__(self, parent=None):
@@ -82,6 +101,8 @@ class MainWindow(QMainWindow):
             lambda x: self.show_settings(True))
         self.ui.logLines.valueChanged.connect(
             lambda x: self.show_settings(True))
+        self.ui.checkBuff.stateChanged.connect(
+            lambda x: self.show_settings(True))
         self.ui.saveSettings.clicked.connect(lambda x: self.set_settings(True))
         self.ui.discardSettings.clicked.connect(
             lambda x: self.set_settings(False))
@@ -94,6 +115,16 @@ class MainWindow(QMainWindow):
                 pickle.dump(self.settings, f)
 
         self.update_settings()
+        self.update_login()
+
+        # Learning setup
+        self.ui.learnCheck.stateChanged.connect(self.update_login)
+        self.ui.learnTypeBox.addItems(self.learn_types)
+        self.ui.learnScheduleBox.addItems(self.learn_sched)
+        self.ui.learnScheduleBox.currentIndexChanged.connect(lambda x: self.set_learn())
+        self.ui.learnButton.clicked.connect(self.learn)
+        self.ui.progressLearn.setHidden(True)
+        self.responses = {}
 
         # Init sniffer thread
         self.ui.pushButton.clicked.connect(self.start)
@@ -104,29 +135,51 @@ class MainWindow(QMainWindow):
         self.ui.tabWidget.currentChanged.connect(self.update_hosts)
         self.ui.tableHosts.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.ui.tableBlocked.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ui.tableCSV.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         try:
             with open('.login', 'rb') as f:
                 cred = pickle.load(f)
                 self.ui.userEdit.setText(cred['usr'])
                 self.ui.pwdEdit.setText(cred['pwd'])
+                self.ui.rememberCheck.setChecked(True)
         except:
             pass
+
+    def update_login(self):
+        if self.ui.learnCheck.isChecked():
+            self.ui.learnTypeBox.setEnabled(True)
+            self.ui.userEdit.setEnabled(False)
+            self.ui.pwdEdit.setEnabled(False)
+            self.ui.rememberCheck.setEnabled(False)
+        else:
+            self.ui.learnTypeBox.setEnabled(False)
+            self.ui.learnTypeBox.setCurrentIndex(0)
+            self.ui.userEdit.setEnabled(True)
+            self.ui.pwdEdit.setEnabled(True)
+            self.ui.rememberCheck.setEnabled(True)
 
     def update_settings(self):
         self.ui.devList.setCurrentText(self.settings['adapter'])
         self.ui.logLines.setValue(self.settings['maxLog'])
         self.ui.checkTray.setChecked(self.settings['tray'])
         self.ui.checkAStart.setChecked(self.settings['autostart'])
+        self.ui.checkBuff.setChecked(self.settings['save_buff'])
         self.ui.textEdit.setMaximumBlockCount(self.settings['maxLog'])
-        self.show_settings(False)
         self.ui.devList.addItems(self.devs)
+        self.show_settings(False)
+
+    def set_learn(self):
+        self.settings['learning'] = self.ui.learnScheduleBox.currentIndex()
+        with open('.config', 'wb') as f:
+                pickle.dump(self.settings, f)
 
     def set_settings(self, new):
         if new:
             self.settings['adapter'] = self.ui.devList.currentText()
             self.settings['tray'] = self.ui.checkTray.isChecked()
             self.settings['autostart'] = self.ui.checkAStart.isChecked()
+            self.settings['save_buff'] = self.ui.checkBuff.isChecked()
             self.settings['maxLog'] = self.ui.logLines.value()
             self.ui.textEdit.setMaximumBlockCount(self.settings['maxLog'])
             with open('.config', 'wb') as f:
@@ -136,10 +189,7 @@ class MainWindow(QMainWindow):
             self.ui.logLines.setValue(self.settings['maxLog'])
             self.ui.checkTray.setChecked(self.settings['tray'])
             self.ui.checkAStart.setChecked(self.settings['autostart'])
-        if self.ui.checkAStart.isChecked():
-            self.autostart.setValue("MainWindow", sys.argv[0])
-        else:
-            self.autostart.remove("MainWindow")
+            self.ui.checkBuff.setChecked(self.settings['save_buff'])
         self.show_settings(False)
 
     def show_settings(self, show):
@@ -163,6 +213,7 @@ class MainWindow(QMainWindow):
         ip = data['ip']
         score = data['score'][0]
         badscore = data['score'][1]
+        #print(f"=======\n{ip=}\n{score=}\n{badscore=}")
         self.add_host(ip)
         borders = {
             'GOOD': [-0.1, 0.2],
@@ -170,7 +221,6 @@ class MainWindow(QMainWindow):
         }
         bad = [0.85, 1.1]
         if all (not k[0]<score<k[1] for k in (borders.values())):
-            #print(f"=======\n{ip=}\n{score=}\n{badscore=}")
             status = self.add_badscore(ip, add=5 if bad[0]<=badscore<=bad[1] else 1)
             if status not in ['G', 'RO']:
                 self.send.add_msg(data_msg(ip=ip, status=status, token=self.token))
@@ -185,7 +235,8 @@ class MainWindow(QMainWindow):
                     case 'Alert':
                         self.add_badscore(msg['ip'])
                     case 'Token':
-                        print(f'TOKEN PROCESS!\n{msg=}')
+                        pass
+                        #print(f'TOKEN PROCESS!\n{msg=}')
                     case _:
                         return
 
@@ -206,50 +257,79 @@ class MainWindow(QMainWindow):
         self.db.edit_host(ip, data)
 
     def update_hosts(self, i):
-        if not i and i > 2: return
-        data = self.db.get_hosts(blocked=i-1)
-        header = ["Status", "Hostname", "IP", "Changed"]
-        self.model = TableModel(header, data)
-        if i-1:
-            self.ui.tableBlocked.setModel(self.model)
-        else:
-            self.ui.tableHosts.setModel(self.model)
+        match i:
+            case 1:
+                data = self.db.get_hosts(blocked=False)
+                header = ["Status", "Hostname", "IP", "Changed"]
+                self.model = TableModel(header, data)
+                self.ui.tableHosts.setModel(self.model)
+            case 2:
+                data = self.db.get_hosts(blocked=True)
+                header = ["Status", "Hostname", "IP", "Changed"]
+                self.model = TableModel(header, data)
+                self.ui.tableBlocked.setModel(self.model)
+            case 3:
+                self.ui.learnScheduleBox.setCurrentIndex(self.settings['learning'])
+                header = ['Protocol','Avg Ports', 'Port min', 'Port max', 'Delay', 'Count', 'Length', 'Suspicious']
+                try:
+                    with open('./csv/data.csv') as File:
+                        reader = csv.reader(File)
+                        data = list(reader)[1:]
+                        self.model = CSVModel(header, data)
+                except:
+                    self.model = CSVModel(header, [])
+                self.ui.tableCSV.setModel(self.model)
 
-    def alert(self, ip):
-        ret = QMessageBox.warning(self, 'Suspicious activity!', "Unknown traffic type from IP \n{ip}}\nIs the connection trusted?",
-                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        return ret == QMessageBox.Yes
+            case _:
+                return
 
     def start(self):
         # send credentials to server
         if self.ui.devList.currentText() == None: return
-        self.thread = Sniffer(str(self.settings['adapter']))
-        self.thread.framesReceived.connect(self.pac_analyse)
-        self.thread.broadcastReceived.connect(self.receive_msg)
+        mode = int(self.ui.learnCheck.isChecked()) + self.ui.learnTypeBox.currentIndex()
+        self.thread = Sniffer(str(self.settings['adapter']), save=mode, parent=self)
         self.thread.startFailed.connect(self.start_error)
-        self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/logo.png"))
         self.ui.pushButton.setText("Stop")
         self.ui.pushButton.clicked.disconnect(self.start)
         self.ui.pushButton.clicked.connect(self.stop)
-        self.send = Sender()
-        if self.ui.rememberCheck.isChecked():
-            self.login_save()
         self.log("System started.")
         self.sys_msg("System started")
+
+        if self.ui.learnCheck.isChecked():
+            self.thread.callAlert.connect(self.alert)
+            self.thread.updateCSV.connect(self.update_csv)
+            self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/learn.png"))
+        else:
+            self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/logo.png"))
+            self.thread.framesReceived.connect(self.pac_analyse)
+            self.thread.broadcastReceived.connect(self.receive_msg)
+            self.send = Sender()
+            if self.ui.rememberCheck.isChecked():
+                self.login_save()
+            self.send.start()
+
+        self.ui.learnCheck.setEnabled(False)
+        self.ui.learnTypeBox.setEnabled(False)
         self.thread.start()
-        self.send.start()
 
     def stop(self):
         self.thread.terminate()
-        self.send.terminate()
+        if self.ui.learnCheck.isChecked():
+            self.ui.learnTypeBox.setEnabled(True)
+            if self.settings['save_buff'] and self.ui.learnTypeBox.currentIndex():
+                with open('.buffer', 'wb') as f:
+                    pickle.dump(self.thread.buffer, f)
+        else:
+            self.send.terminate()
+            self.send = None
+        self.thread = None
         self.log("System terminated.")
         self.sys_msg("System terminated.")
-        self.thread = None
-        self.send = None
         self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/inactive.png"))
         self.ui.pushButton.setText("Start")
         self.ui.pushButton.clicked.disconnect(self.stop)
         self.ui.pushButton.clicked.connect(self.start)
+        self.ui.learnCheck.setEnabled(True)
 
     def start_error(self, msg):
         QMessageBox.critical(self,
@@ -270,6 +350,9 @@ class MainWindow(QMainWindow):
         logging.info(msg)
         self.ui.textEdit.insertPlainText(
             f'{datetime.now().strftime("%d-%m-%y %H:%M:%S")} - {msg}\n')
+
+    def update_csv(self, _=None):
+        self.update_hosts(self.ui.tabWidget.currentIndex())
 
     def add_host(self, ip):
         if ip not in self.db.get_ips():
@@ -314,3 +397,29 @@ class MainWindow(QMainWindow):
         except:
             pass
         print(f"IPS TO BLOCK {self.db.get_ips(blocked=True)}")
+
+    def alert(self, ip):
+        ret = QMessageBox.warning(self, 'Suspicious activity!', f"Unknown traffic type from IP \n{ip}\nIs the connection trusted?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        self.responses[ip] = ret != QMessageBox.Yes
+        return ret != QMessageBox.Yes
+
+    def learn(self):
+        if self.thread is None:
+            self.ui.progressLearn.setHidden(False)
+            self.learner = Learner()
+            self.learner.endLearn.connect(self.end_learn)
+            self.learner.progressAdd.connect(self.pb_update)
+            self.learner.start()
+        else:
+            QMessageBox.critical(self,
+                             self.tr("ERROR!"),
+                             self.tr('Cannot learn, while scan is active!'))
+    def end_learn(self):
+        self.learner.terminate()
+        self.learner = None
+        os.rename('./csv/data.csv', './csv/data.csv.backup')
+        self.update_csv()
+
+    def pb_update(self, prog):
+        self.ui.progressLearn.setValue(prog)

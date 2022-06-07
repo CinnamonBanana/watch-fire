@@ -40,3 +40,40 @@ class TableModel(QAbstractTableModel):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
             return self.header[col]
         return None
+
+class CSVModel(QAbstractTableModel):
+
+    proto = [
+        'Unknown',
+        'TCP',
+        'UDP',
+        'ICMP'
+        ]
+
+    def __init__(self, header, data):
+        super(CSVModel, self).__init__()
+        self.data = data
+        self.header = header
+    
+    def data(self, index, role):
+        if role == Qt.DisplayRole:
+            val = self.data[index.row()][index.column()]
+            if index.column() == 0:
+                return self.proto[int(self.data[index.row()][index.column()])]
+            return val
+        if role == Qt.TextAlignmentRole:
+            return Qt.AlignCenter
+
+    def rowCount(self, index):
+        return len(self.data)
+
+    def columnCount(self, index):
+        if len(self.data):
+            return len(self.data[0])
+        else:
+            return 0
+
+    def headerData(self, col, orientation, role):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            return self.header[col]
+        return None
