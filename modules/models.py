@@ -47,7 +47,8 @@ class CSVModel(QAbstractTableModel):
         'Unknown',
         'TCP',
         'UDP',
-        'ICMP'
+        'ICMP',
+        'DATA'
         ]
 
     def __init__(self, header, data):

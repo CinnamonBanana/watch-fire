@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Watch-Fire
+Version=v0.8.5
+Icon=icon
+X-Icon-Path=./icon.ico
+Exec=sudo -E python ./main.py
+Terminal=false
+Type=Application
+Comment=
+Path=
+StartupNotify=false

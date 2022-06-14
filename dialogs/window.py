@@ -1,28 +1,33 @@
 # -*- coding: utf-8 -*-
 
-"""GUI window with buisness logic."""
+"""GUI window with main logic."""
 
 import ast
-import logging
-import pickle
 import csv
+import logging
 import os
+import pickle
+import time
 from datetime import datetime
 
 from PyQt5 import QtGui
-from PyQt5.QtCore import Qt, QSettings, QAbstractTableModel
-from PyQt5.QtWidgets import QMainWindow, QMessageBox, QSystemTrayIcon, QAction, QMenu, qApp, QHeaderView
-from scipy import rand
+from PyQt5.QtCore import QSettings, Qt, QThread
+from PyQt5.QtWidgets import (QAction, QHeaderView, QMainWindow, QMenu,
+                             QMessageBox, QSystemTrayIcon, qApp)
 
+from inet import *
+from modules.buffer import Buffer
+from modules.collector import Collector
 from modules.db import Database
 from modules.learn import Learner
-from modules.models import TableModel, CSVModel
+from modules.models import CSVModel, TableModel
+from modules.predictor import Predictor
 from modules.ruleadder import Ruler
-from modules.sender import Sender
-from modules.sniffer import Sniffer
+from modules.sender import Sender, get_token, get_ifs
+from modules.sniff import Sniffer
 from modules.utils import data_msg
-from inet import *
 from ui.main import Ui_MainWindow
+
 
 class MainWindow(QMainWindow):
 
@@ -38,9 +43,7 @@ class MainWindow(QMainWindow):
     }
 
     devs = [
-        '',
-        'wlp6s0',
-        'Dell Wireless 1705 802.11b|g|n (2.4GHZ)'
+        'None',
     ]
 
     learn_types = [
@@ -66,7 +69,6 @@ class MainWindow(QMainWindow):
         self.db = Database()
         self.minScore = 5
         self.maxScore = 10
-        self.server = serverip
         self.token = 'None'
         self.ruler = Ruler()
 
@@ -124,12 +126,13 @@ class MainWindow(QMainWindow):
         self.ui.learnScheduleBox.currentIndexChanged.connect(lambda x: self.set_learn())
         self.ui.learnButton.clicked.connect(self.learn)
         self.ui.progressLearn.setHidden(True)
-        self.responses = {}
+        self.learning = False
 
         # Init sniffer thread
         self.ui.pushButton.clicked.connect(self.start)
-        self.send = None
-        self.thread = None
+        self.responses = {}
+        self.threads = {}
+        self.workers = {}
 
         # Setting up host tables
         self.ui.tabWidget.currentChanged.connect(self.update_hosts)
@@ -160,13 +163,16 @@ class MainWindow(QMainWindow):
             self.ui.rememberCheck.setEnabled(True)
 
     def update_settings(self):
-        self.ui.devList.setCurrentText(self.settings['adapter'])
         self.ui.logLines.setValue(self.settings['maxLog'])
         self.ui.checkTray.setChecked(self.settings['tray'])
         self.ui.checkAStart.setChecked(self.settings['autostart'])
         self.ui.checkBuff.setChecked(self.settings['save_buff'])
         self.ui.textEdit.setMaximumBlockCount(self.settings['maxLog'])
-        self.ui.devList.addItems(self.devs)
+        self.ui.devList.addItems(['None']+list(get_ifs().keys()))
+        try:
+            self.ui.devList.setCurrentText(self.settings['adapter'])
+        except:
+            self.ui.devList.setCurrentText('None')
         self.show_settings(False)
 
     def set_learn(self):
@@ -185,11 +191,7 @@ class MainWindow(QMainWindow):
             with open('.config', 'wb') as f:
                 pickle.dump(self.settings, f)
         else:
-            self.ui.devList.setCurrentText(self.settings['adapter'])
-            self.ui.logLines.setValue(self.settings['maxLog'])
-            self.ui.checkTray.setChecked(self.settings['tray'])
-            self.ui.checkAStart.setChecked(self.settings['autostart'])
-            self.ui.checkBuff.setChecked(self.settings['save_buff'])
+            self.update_settings()
         self.show_settings(False)
 
     def show_settings(self, show):
@@ -208,12 +210,12 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             self.sys_msg("Application was minimized to Tray")
-
-    def pac_analyse(self, data):
+    
+    def susp_detect(self, data):
         ip = data['ip']
-        score = data['score'][0]
-        badscore = data['score'][1]
-        #print(f"=======\n{ip=}\n{score=}\n{badscore=}")
+        score = data['good']
+        badscore = data['bad']
+        # print(f"=======\n{ip=}\n{score=}\n{badscore=}")
         self.add_host(ip)
         borders = {
             'GOOD': [-0.1, 0.2],
@@ -223,8 +225,15 @@ class MainWindow(QMainWindow):
         if all (not k[0]<score<k[1] for k in (borders.values())):
             status = self.add_badscore(ip, add=5 if bad[0]<=badscore<=bad[1] else 1)
             if status not in ['G', 'RO']:
-                self.send.add_msg(data_msg(ip=ip, status=status, token=self.token))
+                self.workers['send'].add_msg(data_msg(ip=ip, payload=status, token=self.token))
     
+    def receive_pkt(self, pkt):
+        if 'buff' in self.workers:
+            self.workers['buff'].add_pkt(pkt)
+    
+    def receive_serv(self, msg):
+        print(msg)
+
     def receive_msg(self, data):
         try:
             msg = ast.literal_eval(data['msg'].decode('UTF-8'))
@@ -235,10 +244,7 @@ class MainWindow(QMainWindow):
                     case 'Alert':
                         self.add_badscore(msg['ip'])
                     case 'Token':
-                        pass
-                        #print(f'TOKEN PROCESS!\n{msg=}')
-                    case _:
-                        return
+                        self.token_update(msg['ip'], msg['payload'])
 
         except Exception as e:
             pass
@@ -279,57 +285,84 @@ class MainWindow(QMainWindow):
                 except:
                     self.model = CSVModel(header, [])
                 self.ui.tableCSV.setModel(self.model)
-
-            case _:
-                return
+        if not self.learning:
+            self.ui.progressLearn.setHidden(True)
 
     def start(self):
-        # send credentials to server
-        if self.ui.devList.currentText() == None: return
-        mode = int(self.ui.learnCheck.isChecked()) + self.ui.learnTypeBox.currentIndex()
-        self.thread = Sniffer(str(self.settings['adapter']), save=mode, parent=self)
-        self.thread.startFailed.connect(self.start_error)
-        self.ui.pushButton.setText("Stop")
-        self.ui.pushButton.clicked.disconnect(self.start)
-        self.ui.pushButton.clicked.connect(self.stop)
-        self.log("System started.")
-        self.sys_msg("System started")
-
+        # if not self.get_token(): return
+        ifs = get_ifs()
+        if self.settings['adapter'] == 'None' or self.settings['adapter'] not in ifs.keys(): 
+            self.sys_msg('Nonexistent adapter selected\nPlease choose one in\nSettings -> Adapter')
+            return
+        # Init sniffer worker
+        self.main_scr_update()
+        print(ifs[self.settings['adapter']])
+        self.workers['snif'] = Sniffer(self.settings['adapter'], ifs[self.settings['adapter']])
+        self.workers['snif'].signals.startFailed.connect(self.start_error)
+        self.workers['snif'].signals.broadcastReceived.connect(self.receive_msg)
+        self.workers['snif'].signals.serverReceived.connect(self.receive_serv)
+        # Init buffer worker
+        self.workers['buff'] = Buffer(self, self.ui.learnTypeBox.currentIndex())
+        self.workers['buff'].signals.callAlert.connect(self.alert)
+        self.workers['snif'].signals.framesReceived.connect(self.workers['buff'].add_pkt)
         if self.ui.learnCheck.isChecked():
-            self.thread.callAlert.connect(self.alert)
-            self.thread.updateCSV.connect(self.update_csv)
-            self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/learn.png"))
+            # Init collector worker
+            self.workers['coll'] = Collector()
+            self.workers['coll'].signals.updateCSV.connect(self.update_csv)
+            self.workers['buff'].signals.flush.connect(self.workers['coll'].add_data)
         else:
-            self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/logo.png"))
-            self.thread.framesReceived.connect(self.pac_analyse)
-            self.thread.broadcastReceived.connect(self.receive_msg)
-            self.send = Sender()
+            # Init predictor worker
+            self.workers['pred'] = Predictor()
+            self.workers['pred'].signals.suspPredicted.connect(self.susp_detect)
+            self.workers['buff'].signals.flush.connect(self.workers['pred'].add_data)
+            # Init sender worker
+            self.workers['send'] = Sender()
             if self.ui.rememberCheck.isChecked():
                 self.login_save()
-            self.send.start()
-
-        self.ui.learnCheck.setEnabled(False)
-        self.ui.learnTypeBox.setEnabled(False)
-        self.thread.start()
+        # Moving workers to threads and start
+        for key, wrkr in self.workers.items():
+            self.threads[key] = QThread()
+            wrkr.moveToThread(self.threads[key])
+            self.threads[key].started.connect(wrkr.run)
+            self.threads[key].start()
 
     def stop(self):
-        self.thread.terminate()
-        if self.ui.learnCheck.isChecked():
-            self.ui.learnTypeBox.setEnabled(True)
-            if self.settings['save_buff'] and self.ui.learnTypeBox.currentIndex():
-                with open('.buffer', 'wb') as f:
-                    pickle.dump(self.thread.buffer, f)
-        else:
-            self.send.terminate()
-            self.send = None
-        self.thread = None
-        self.log("System terminated.")
-        self.sys_msg("System terminated.")
-        self.ui.logoLabel.setPixmap(QtGui.QPixmap("./res/inactive.png"))
-        self.ui.pushButton.setText("Start")
-        self.ui.pushButton.clicked.disconnect(self.stop)
-        self.ui.pushButton.clicked.connect(self.start)
-        self.ui.learnCheck.setEnabled(True)
+        self.main_scr_update(start=False)
+        for key, wrkr in self.workers.items():
+            wrkr.stop()
+            self.threads[key].terminate()
+            self.threads[key].wait()
+        self.workers.clear()
+        self.threads.clear()
+
+    def main_scr_update(self, start = True):
+        if start:   # Start
+            buttonText = 'Stop'
+            self.ui.pushButton.clicked.disconnect(self.start)
+            self.ui.pushButton.clicked.connect(self.stop)
+            learnCheck = False
+            learnBox = False
+            logo = "./res/learn.png" if self.ui.learnCheck.isChecked() else "./res/logo.png"
+            msg = "System started"
+        else:       # Stop
+            buttonText = 'Start'
+            logo = "./res/inactive.png"
+            self.ui.pushButton.clicked.disconnect(self.stop)
+            self.ui.pushButton.clicked.connect(self.start)
+            msg = "System terminated"
+            learnCheck = True
+            learnBox = False
+            if self.ui.learnCheck.isChecked():
+                learnBox = True
+                if self.settings['save_buff'] and self.ui.learnTypeBox.currentIndex():
+                    with open('.buffer', 'wb') as f:
+                        pickle.dump(self.threads['buff'].buffer, f)
+        
+        self.ui.learnTypeBox.setEnabled(learnBox)
+        self.ui.learnCheck.setEnabled(learnCheck)
+        self.ui.pushButton.setText(buttonText)
+        self.ui.logoLabel.setPixmap(QtGui.QPixmap(logo))
+        self.log(msg, sysmsg=True)
 
     def start_error(self, msg):
         QMessageBox.critical(self,
@@ -337,6 +370,29 @@ class MainWindow(QMainWindow):
                              self.tr(msg))
         self.log(msg)
         self.stop()
+
+    def get_token(self):
+        data = {
+         'user': self.ui.userEdit.text(),
+         'pwd': self.ui.pwdEdit.text(),
+         'opKey': f"{self.ui.userEdit.text()}key"
+        }
+        token = get_token(data, serverip)
+        if token == 'Wrong credentials!':
+            QMessageBox.warning(self,'Auth error!',token,
+                                  QMessageBox.Ok, QMessageBox.Ok)
+            return False
+        elif token:
+            self.token = token
+            return True
+        else:
+            ret = QMessageBox.warning(self,'Token get error!',"Couldn't connect to server.\nProceed anyway?",
+                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret == QMessageBox.Yes:
+                self.token = 'None'
+                return True
+            else:
+                return False
 
     def login_save(self):
         data = {
@@ -346,7 +402,8 @@ class MainWindow(QMainWindow):
         with open('.login', 'wb') as f:
             pickle.dump(data, f)
 
-    def log(self, msg):
+    def log(self, msg, sysmsg = False):
+        if sysmsg: self.sys_msg(msg)
         logging.info(msg)
         self.ui.textEdit.insertPlainText(
             f'{datetime.now().strftime("%d-%m-%y %H:%M:%S")} - {msg}\n')
@@ -396,7 +453,7 @@ class MainWindow(QMainWindow):
             self.ruler.block_ips(self.db.get_ips(blocked=True))
         except:
             pass
-        print(f"IPS TO BLOCK {self.db.get_ips(blocked=True)}")
+        # print(f"IPS TO BLOCK {self.db.get_ips(blocked=True)}")
 
     def alert(self, ip):
         ret = QMessageBox.warning(self, 'Suspicious activity!', f"Unknown traffic type from IP \n{ip}\nIs the connection trusted?",
@@ -405,21 +462,33 @@ class MainWindow(QMainWindow):
         return ret != QMessageBox.Yes
 
     def learn(self):
-        if self.thread is None:
+        if not self.workers:
+            self.learning = True
             self.ui.progressLearn.setHidden(False)
-            self.learner = Learner()
-            self.learner.endLearn.connect(self.end_learn)
-            self.learner.progressAdd.connect(self.pb_update)
-            self.learner.start()
+            self.workers['lrnr'] = Learner()
+            self.workers['lrnr'].signals.endLearn.connect(self.end_learn)
+            self.workers['lrnr'].signals.progressAdd.connect(self.pb_update)
+            self.threads['lrnr'] = QThread()
+            self.workers['lrnr'].moveToThread(self.threads['lrnr'])
+            self.threads['lrnr'].started.connect(self.workers['lrnr'].run)
+            self.threads['lrnr'].start()
+            self.settings['last_learn'] = time.time()
         else:
             QMessageBox.critical(self,
                              self.tr("ERROR!"),
                              self.tr('Cannot learn, while scan is active!'))
     def end_learn(self):
-        self.learner.terminate()
-        self.learner = None
-        os.rename('./csv/data.csv', './csv/data.csv.backup')
+        for key, wrkr in self.workers.items():
+            wrkr.stop()
+            # self.threads[key].quit()
+            self.threads[key].terminate()
+            self.threads[key].wait()
+        self.workers.clear()
+        self.threads.clear()
+        time = f'{datetime.now().strftime("%d.%m.%y_%H-%M-%S")}'
+        os.rename('./csv/data.csv', f'./csv/backup_{time}.csv')
         self.update_csv()
+        self.learning = False
 
     def pb_update(self, prog):
         self.ui.progressLearn.setValue(prog)

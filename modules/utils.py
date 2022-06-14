@@ -12,21 +12,19 @@ def get_avg(proto, data):
         }
         return res
 
-def get_proto(proto):
-        match proto:
-                case 6:  # TCP
-                    return 1
-                case 17: # UDP
-                    return 2
-                case 1:  # ICMP
-                    return 3
-                case 58: # ICMP
-                    return 3
-                case _:  # OTHER
-                    return 0
+def get_num_proto(proto):
+    match proto:
+            case 'TCP':   # TCP
+                return 1
+            case 'UDP':   # UDP
+                return 2
+            case 'ICMP':  # ICMP
+                return 3
+            case 'DATA':  # DATA
+                return 4
+            case _:       # OTHER
+                return 0
 
-def data_msg(ip, token, status=None, name=None, type='Alert'):
-    if type == 'Alert':
-        return {'type': type, 'ip': ip, 'status':status, 'tmstmp':time.time(), 'token':token}
-    else:
-        return {'type': type, 'ip': ip, 'name':name, 'tmstmp':time.time(), 'token':token}
+def data_msg(ip, token, payload=None, name=None, type='Alert'):
+    return {'type': type, 'ip': ip, 'payload':payload, 'tmstmp':time.time(), 'token':token}
+
